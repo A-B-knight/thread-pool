@@ -1,0 +1,139 @@
+#include <pthread.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include "thrd_pool.h"
+// #include "spinlock.h"
+
+
+
+
+
+
+
+
+
+// typedef struct spinlock spinlock_t;
+
+typedef struct task_s {
+    void *next;
+    handler_pt func;
+    void *arg;
+} task_t;
+
+typedef struct task_queue_s {
+    void *head;
+    void **tail;
+    int block;
+    spinlock_t lock;
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+} task_queue_t;
+
+struct thrdpool_s {
+    task_queue_t *task_queue;
+    atomic_int quit;
+    int thrd_count;
+    pthread_t *threads;
+};
+
+// 对称
+// 资源的创建   回滚式编程
+// 业务逻辑     防御式编程
+static task_queue_t *
+__taskqueue_create() {
+    int ret;
+    task_queue_t *queue = (task_queue_t *)malloc(sizeof(task_queue_t));
+    if (queue) {
+        ret = pthread_mutex_init(&queue->mutex, NULL);
+        if (ret == 0) {
+            ret = pthread_cond_init(&queue->cond, NULL);
+            if (ret == 0) {
+                spinlock_init(&queue->lock);
+                queue->head = NULL;
+                queue->tail = &queue->head;
+                queue->block = 1;
+                return queue;
+            }
+            pthread_mutex_destroy(&queue->mutex);
+        }
+        free(queue);
+    }
+    return NULL;
+}
+
+static void 
+__nonblock(task_queue_t *queue) {
+    pthread_mutex_lock(&queue->mutex);
+    queue->block = 0;
+    pthread_mutex_unlock(&queue->mutex);
+    pthread_cond_broadcast(&queue->cond);
+}
+
+static inline void
+__add_task(task_queue_t *queue, void *task) {
+    // 不限定任务类型，只要该任务的结构起始内存是一个用于链接下一个节点的指针
+    void **link = (void **)task;
+    *link = NULL;
+
+    spinlock_lock(&queue->lock);
+    *queue->tail /* 等价于 queue->tail->next */ = link;
+    queue->tail = link;
+    spinlock_unlock(&queue->lock);
+    pthread_cond_signal(&queue->cond);
+}
+
+static inline void *
+__pop_task(task_queue_t *queue) {
+    spinlock_lock(&queue->lock);
+    if (queue->head == NULL) {
+        spinlock_unlock(&queue->lock);
+        return NULL;
+    }
+    task_t *task = queue->head;
+
+    void **link = (void **)task;
+    queue->head = *link;
+
+    if (queue->head == NULL) {
+        queue->tail = &queue->head;
+    }
+    spinlock_unlock(&queue->lock);
+    return task;
+}
+
+static inline void *
+__get_task(task_queue_t *queue) {
+    task_t *task;
+    // 虚假唤醒
+    while ((task == __pop_task(queue)) == NULL) {
+        pthread_mutex_lock(&queue->mutex);
+        if (queue->block == 0) {
+            pthread_mutex_unlock(&queue->mutex);
+            return NULL;
+        }
+        pthread_cond_wait(&queue->cond, &queue->mutex);
+        pthread_mutex_unlock(&queue->mutex);
+    }
+    return task;
+}
+
+
+
+
+thrdpool_t *
+thrdpool_create(int thrd_count) {
+    thrdpool_t *pool;
+    pool = (thrdpool_t *)malloc(sizeof(*pool));
+    if (pool) {
+        task_queue_t *queue = __taskqueue_create();
+        if (queue) {
+            pool->task_queue = queue;
+            atomic_init(&pool->quit, 0);
+            if (__thread_create(pool, thrd_count) == 0)
+                return pool;
+            __taskqueue_destroy(queue);
+        }
+        free (pool);
+    }
+    return NULL;
+}
