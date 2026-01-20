@@ -5,13 +5,6 @@
 // #include "spinlock.h"
 
 
-
-
-
-
-
-
-
 // typedef struct spinlock spinlock_t;
 
 typedef struct task_s {
@@ -61,7 +54,7 @@ __taskqueue_create() {
     return NULL;
 }
 
-static void 
+static void
 __nonblock(task_queue_t *queue) {
     pthread_mutex_lock(&queue->mutex);
     queue->block = 0;
@@ -105,7 +98,7 @@ static inline void *
 __get_task(task_queue_t *queue) {
     task_t *task;
     // 虚假唤醒
-    while ((task == __pop_task(queue)) == NULL) {
+    while ((task = __pop_task(queue)) == NULL) {
         pthread_mutex_lock(&queue->mutex);
         if (queue->block == 0) {
             pthread_mutex_unlock(&queue->mutex);
@@ -117,8 +110,78 @@ __get_task(task_queue_t *queue) {
     return task;
 }
 
+static void
+__taskqueue_destroy(task_queue_t *queue) {
+    task_t *task;
+    while ((task = __pop_task(queue)) != NULL) {
+        free(task);
+    }
+    pthread_cond_destroy(&queue->cond);
+    pthread_mutex_destroy(&queue->mutex);
+    free(queue);
+}
 
+static void *
+__thrdpool_worker(void *arg) {
+    thrdpool_t *pool = (thrdpool_t *)arg;
+    task_t *task;
+    void *ctx;
 
+    while (atomic_load(&pool->quit) == 0) {
+        task_t *task = __get_task(pool->task_queue);
+        if (!task) break;
+        handler_pt func = task->func;
+        ctx = task->arg;
+        free(task);
+        func(ctx);
+    }
+    
+    return NULL;
+}
+
+static void
+__threads_terminate(thrdpool_t *pool) {
+    atomic_store(&pool->quit, 1);
+    __nonblock(pool->task_queue);
+    int i;
+    for (i = 0; i < pool->thrd_count; i++) {
+        pthread_join(pool->threads[i], NULL);
+    }
+}
+
+static int
+__thread_create(thrdpool_t *pool, int thrd_count) {
+    pthread_attr_t attr;
+    int i, ret;
+
+    ret = pthread_attr_init(&attr);
+
+    if (ret == 0) {
+        pool->threads = (pthread_t *)malloc(sizeof(pthread_t) * thrd_count);
+        if (pool->threads) {
+            int i = 0;
+            for (i = 0; i < thrd_count; i++) {
+                if (pthread_create(&pool->threads[i], &attr, __thrdpool_worker, pool) != 0) {
+                    break;
+                }
+            }
+            pool->thrd_count = i;
+            pthread_attr_destroy(&attr);
+            if (i == thrd_count) 
+                return 0;
+            __threads_terminate(pool);
+            free(pool->threads);
+        }
+        ret = -1;
+    }
+    return ret;
+}
+
+void
+thrdpool_terminate(thrdpool_t *pool) {
+    atomic_store(&pool->quit, 1);
+    __nonblock(pool->task_queue);
+}
 
 thrdpool_t *
 thrdpool_create(int thrd_count) {
@@ -136,4 +199,27 @@ thrdpool_create(int thrd_count) {
         free (pool);
     }
     return NULL;
+}
+
+int
+thrdpool_post(thrdpool_t *pool, handler_pt func, void *arg) {
+    if (atomic_load(&pool->quit) ==1)
+        return -1;
+    task_t *task = (task_t *)malloc(sizeof(task_t));
+    if (!task) return -1;
+    task->func = func;
+    task->arg = arg;
+    __add_task(pool->task_queue, task);
+    return 0;
+}
+
+void 
+thrdpool_waitdone(thrdpool_t *pool){
+    int i;
+    for(i = 0; i < pool->thrd_count; i++){
+        pthread_join(pool->threads[i], NULL);
+    }
+    __taskqueue_destroy(pool->task_queue);
+    free(pool->threads);
+    free(pool);
 }

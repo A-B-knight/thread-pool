@@ -12,12 +12,16 @@ extern "C"
 #endif 
 
 // 对称处理
+// 创建线程池
 thrdpool_t *thrdpool_create(int thrd_count);
 
+// 暂停线程池
 void thrdpool_terminate(thrdpool_t *pool);
 
+// 提交任务到线程池
 int thrdpool_post(thrdpool_t *pool, handler_pt func, void *arg);
 
+// 等待线程池任务完成
 void thrdpool_waitdone(thrdpool_t *pool);
 
 #ifdef __cplusplus
