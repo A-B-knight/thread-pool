@@ -2,10 +2,10 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include "thrd_pool.h"
-// #include "spinlock.h"
+#include "spinlock.h"
+#include <stdatomic.h>
 
-
-// typedef struct spinlock spinlock_t;
+typedef struct spinlock spinlock_t;
 
 typedef struct task_s {
     void *next;
