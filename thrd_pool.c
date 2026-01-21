@@ -2,10 +2,12 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include "thrd_pool.h"
-// #include "spinlock.h"
+#include <stdatomic.h>
 
-
-// typedef struct spinlock spinlock_t;
+/*
+生成动态库命令
+gcc thrd_pool.c -o libthrdpool.so -I./ -lpthread -fPIC -shared
+*/
 
 typedef struct task_s {
     void *next;
@@ -17,7 +19,7 @@ typedef struct task_queue_s {
     void *head;
     void **tail;
     int block;
-    spinlock_t lock;
+    pthread_mutex_t lock;
     pthread_mutex_t mutex;
     pthread_cond_t cond;
 } task_queue_t;
@@ -41,7 +43,7 @@ __taskqueue_create() {
         if (ret == 0) {
             ret = pthread_cond_init(&queue->cond, NULL);
             if (ret == 0) {
-                spinlock_init(&queue->lock);
+                pthread_mutex_init(&queue->lock, NULL);
                 queue->head = NULL;
                 queue->tail = &queue->head;
                 queue->block = 1;
@@ -68,18 +70,18 @@ __add_task(task_queue_t *queue, void *task) {
     void **link = (void **)task;
     *link = NULL;
 
-    spinlock_lock(&queue->lock);
+    pthread_mutex_lock(&queue->lock);
     *queue->tail /* 等价于 queue->tail->next */ = link;
     queue->tail = link;
-    spinlock_unlock(&queue->lock);
+    pthread_mutex_unlock(&queue->lock);
     pthread_cond_signal(&queue->cond);
 }
 
 static inline void *
 __pop_task(task_queue_t *queue) {
-    spinlock_lock(&queue->lock);
+    pthread_mutex_lock(&queue->lock);
     if (queue->head == NULL) {
-        spinlock_unlock(&queue->lock);
+        pthread_mutex_unlock(&queue->lock);
         return NULL;
     }
     task_t *task = queue->head;
@@ -90,7 +92,7 @@ __pop_task(task_queue_t *queue) {
     if (queue->head == NULL) {
         queue->tail = &queue->head;
     }
-    spinlock_unlock(&queue->lock);
+    pthread_mutex_unlock(&queue->lock);
     return task;
 }
 
@@ -135,7 +137,7 @@ __thrdpool_worker(void *arg) {
         free(task);
         func(ctx);
     }
-    
+
     return NULL;
 }
 
