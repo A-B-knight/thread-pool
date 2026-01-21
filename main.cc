@@ -23,10 +23,11 @@ int main(int argc, char **argv) {
     int arr[MAX_SIZE];
     for (int i = 0; i < MAX_SIZE; i++) {
         arr[i] = i;
-        if (i % 10 == 0)
-            usleep(1000);
+        // if (i % 10 == 0)
+        //     usleep(1000);
         thrdpool_post(pool, funcs[i % 2], static_cast<void *>(&arr[i]));
     }
+    usleep(10000);
     thrdpool_terminate(pool);
     thrdpool_waitdone(pool);
     return 0;
